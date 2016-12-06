@@ -28,8 +28,8 @@ async def create_pool(loop, **kw):
 		user=kw['user'],
 		password=kw['password'],
 		db=kw['db'],
-		charset=kw.get('charset','utf-8'),
-		autocommit=kw.get('autocommit',True),
+		charset=kw.get('charset','utf8'),
+		autocommit=kw.get('autocommit', True),
 		maxsize=kw.get('maxsize',10),
 		minsize=kw.get('minsize',1),
 		loop=loop # 传递消息循环对象，用于异步执行
@@ -197,57 +197,82 @@ class ModelMetaclass(type):
 # 元类自然是为了封装我们之前写的具体的SQL处理函数，从数据库获取数据
 # ORM映射基类,通过ModelMetaclass元类来构造类
 class Model(dict, metaclass=ModelMetaclass):
-
-	def __init__(self,**kw):
+	# 这里直接调用了Model的父类dict的初始化方法，把传入的关键字参数存入自身的dict中
+	def __init__(self, **kw):
 		super(Model,self).__init__(**kw)
 
+	# 获取dict的key
 	def __getattr__(self,key):
 		try:
 			return self[key]
 		except KeyError:
 			raise AttributeError(r"'Model' object has no attribute '%s'" %key)
 
-	def __setattr__(self,key,value):
+	# 设置dict的值的，通过d.k = v 的方式
+	def __setattr__(self, key, value):
 		self[key] = value
 
-	def getValue(self,key):
+
+	# 获取某个具体的值即Value,如果不存在则返回None
+	def getValue(self, key):
 		return __getattr__(self,key,None)
 
-	def getValueOrDefault(self,key):
-		value = getattr(self,key,None)
+    # 与上一个函数类似，但是如果这个属性与之对应的值为None时，就需要返回定义的默认值
+	def getValueOrDefault(self, key):
+		value = getattr(self, key, None)
 		if value is None:
+			# self.__mapping__在metaclass中，用于保存不同实例属性在Model基类中的映射关系
+            # field是一个定义域!
 			field = self.__mappings__[key]
+			# 如果field存在default属性，那可以直接使用这个默认值
 			if field.default is not None:
 				value = field.default() if callable(field.default) else field.default
-				logging.debug('using default value for %s: %s' % (key,str(value)))
-				setattr(self,key,value)
+				logging.debug('using default value for %s: %s' % (key, str(value)))
+				setattr(self, key, value)
 		return value
 
+# ==============往Model类添加类方法，就可以让所有子类调用类方法=================
+
+	# 这个装饰器是类方法的意思，即可以不创建实例直接调用类方法
 	@classmethod
-	async def findAll(cls,where=None,args=None,**kw):
+	async def find(cls, pk):
+		' find object by primary key. '
+		rs = await select('%s where `%s`=?' %(cls.__select__, cls.__primary_key__), [pk], 1)
+		if len(rs) == 0:
+			return None
+		return cls(**rs[0])		
+
+	# findAll() - 根据WHERE条件查找
+	@classmethod
+	async def findAll(cls, where=None, args=None, **kw):
 	    ' find objects by where clause. '
 	    sql = [cls.__select__]
+	    # 如果有where参数就在sql语句中添加字符串where和参数where
 	    if where:
 	    	sql.append('where')
 	    	sql.append(where)
+	    # 这个参数是在执行sql语句前嵌入到sql语句中的，如果为None则定义一个空的list
 	    if args is None:
 	    	args = []
-	    orderBy = kw.get('orderBy',None)
+
+	    # 如果有OrderBy参数就在sql语句中添加字符串OrderBy和参数OrderBy，但是OrderBy是在关键字参数中定义的
+	    orderBy = kw.get('orderBy', None)
 	    if orderBy:
 	    	sql.append('order by')
 	    	sql.append(orderBy)
-	    limit = kw.get('limit',None)
+	    limit = kw.get('limit', None)
 	    if limit is not None:
 	    	sql.append('limit')
-	    	if isinstance(limit,int):
+	    	if isinstance(limit, int):
 	    		sql.append('?')
 	    		args.append(limit)
-	    	elif isinstance(limit,tuple) and len(limit) == 2:
+	    	if isinstance(limit,tuple) and len(limit) == 2:
 	    		sql.append('?, ?')
+		        # 如果有OrderBy参数就在sql语句中添加字符串OrderBy和参数OrderBy，但是OrderBy是在关键字参数中定义的
 	    		args.extend(limit)
 	    	else:
 	    		raise ValueError('Invalid limit value: %s' % str(limit))
-	    rs = await select(' '.join(sql),args)
+	    rs = await select(' '.join(sql), args)
 	    return [cls(**r) for r in rs]
 
 	@classmethod
@@ -262,18 +287,16 @@ class Model(dict, metaclass=ModelMetaclass):
 			return None
 		return rs[0]['_num_']
 
-	@classmethod
-	async def find(cls, pk):
-		' find object by primary key. '
-		rs = await select('%s where `%s`=?' %(cls.__select__, cls.__primary_key__), [pk], 1)
-		if len(rs) == 0:
-			return None
-		return cls(**rs[0])
 
+# ===============往Model类添加实例方法，就可以让所有子类调用实例方法===================
+
+
+    # save、update、remove这三个方法需要管理员权限才能操作，所以不定义为类方法，需要创建实例之后才能调用
 	async def save(self):
-		args = list(map(self.getValueOrDefault, self.__fields__))
-		args.append(self.getValueOrDefault(self.__primary_key__))
-		rows = await execute(self.__update__,args)
+		args = list(map(self.getValueOrDefault, self.__fields__))  # 将除主键外的属性名添加到args这个列表中
+		args.append(self.getValueOrDefault(self.__primary_key__))  # 再把主键添加到这个列表的最后
+		rows = await execute(self.__insert__, args)
+		# 插入纪录受影响的行数应该为1，如果不是1 那就错了
 		if rows != 1:
 			logging.warn('failed to insert by primary key: affected rows: %s ' %rows)
 
