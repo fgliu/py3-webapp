@@ -17,6 +17,7 @@ import orm
 
 from coroweb import add_routes, add_static
 
+from handlers import cookie2user, COOKIE_NAME
 
 
 # 这个函数的功能是初始化jinja2模板，配置jinja2的环境
@@ -49,6 +50,25 @@ async def logger_factory(app, handler):
 		# await asyncio.sleep(0,3)
 		return (await handler(request))
 	return logger
+
+
+@asyncio.coroutine
+def auth_factory(app, handler):
+    @asyncio.coroutine
+    def auth(request):
+        logging.info('check user: %s %s' % (request.method, request.path))
+        request.__user__ = None
+        cookie_str = request.cookies.get(COOKIE_NAME)
+        if cookie_str:
+            user = yield from cookie2user(cookie_str)
+            if user:
+                logging.info('set current user: %s' % user.email)
+                request.__user__ = user
+        if request.path.startswith('/manage/') and (request.__user__ is None or not request.__user__.admin):
+            return web.HTTPFound('/signin')
+        return (yield from handler(request))
+    return auth
+
 
 
 # 只有当请求方法为POST时这个函数才起作用
@@ -128,10 +148,8 @@ async def init(loop):
 	await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='www-data', password='www-data', db='awesome')
 	
 	app = web.Application(loop=loop, middlewares=[
-			logger_factory, response_factory
+			logger_factory,auth_factory, response_factory
 		])
-	logging.info('app is ok')
-
 	init_jinja2(app, filters=dict(datetime=datetime_filter))
 	add_routes(app, 'handlers')
 	add_static(app)
