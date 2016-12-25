@@ -278,11 +278,13 @@ class Model(dict, metaclass=ModelMetaclass):
 	@classmethod
 	async def findNumber(cls,selectField,where=None,args=None):
 		' find number by select and where. '
-		sql = ['select %s _num_ from `%s`' %(selectField,cls.__table__)]
+		sql = ['select %s _num_ from `%s`' %(selectField, cls.__table__)]
 		if where:
 			sql.append('where')
 			sql.append(where)
-		rs = await select(' '.join(sql),args,1)
+
+		logging.info('begin print  findNumber method sql : %s ' % sql)
+		rs = await select("  ".join(sql), args,1)
 		if len(rs) == 0:
 			return None
 		return rs[0]['_num_']
@@ -298,7 +300,7 @@ class Model(dict, metaclass=ModelMetaclass):
 		rows = await execute(self.__insert__, args)
 		# 插入纪录受影响的行数应该为1，如果不是1 那就错了
 		if rows != 1:
-			logging.warn('failed to insert by primary key: affected rows: %s ' %rows)
+			logging.warn('failed to insert by primary key: affected rows: %s ' % rows)
 
 
 	async def update(self):
